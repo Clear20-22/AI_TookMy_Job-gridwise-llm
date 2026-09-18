@@ -237,7 +237,7 @@ import json
 import os
 
 SAMPLE_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "BUP_CSE_FEST_2026_Preli_Public_Sample_Cases.json",
 )
 

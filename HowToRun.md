@@ -41,9 +41,10 @@ pytest -v
 ```
 
 ### Run specific test suites
-- **Optimizer Core Tests**: `pytest app/test/test_optimizer.py -v`
+- **Optimizer Core Tests**: `pytest tests/test_optimizer.py -v`
 - **Sample Cases Validation (All 10 benchmark cases)**: `pytest tests/test_sample_cases.py -v`
 - **Guardrail Validator Tests**: `pytest tests/test_guardrails.py -v`
+- **Preprocessor Tests**: `pytest tests/test_preprocessor.py -v`
 - **API Endpoint Tests**: `pytest tests/test_api.py -v`
 
 ---
