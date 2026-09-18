@@ -389,34 +389,44 @@ curl -X POST http://localhost:8000/optimize-energy \
 
 ```
 AI_TookMy_Job-gridwise-llm/
-├── .env.example               # Template environment configuration
-├── .gitignore                 # Excludes caches, venv, and secrets
-├── Dockerfile                 # Multi-stage production container build
+├── .dockerignore              # Docker build ignore rules
+├── .env.example               # Template environment configuration (no secrets)
+├── .gitignore                 # Excludes caches, venv, and secrets (.env)
+├── Dockerfile                 # Production multi-stage container build
+├── HowToRun.md                # Quick local reproduction guide
 ├── LICENSE                    # Open-source MIT License
-├── README.md                  # System documentation & reproduction manual
+├── README.md                  # Comprehensive system documentation
+├── pytest.ini                 # Pytest configuration
 ├── requirements.txt           # Production Python package dependencies
 ├── app/
 │   ├── __init__.py
-│   ├── main.py                # FastAPI entrypoint (/health, /optimize-energy)
-│   ├── config.py              # Application settings and environment parser
-│   ├── models/
+│   ├── main.py                # FastAPI microservice gateway (/health, /optimize-energy)
+│   ├── model/                 # Pydantic v2 core request/response schemas
 │   │   ├── __init__.py
-│   │   ├── request.py         # Pydantic input schemas (Battery, HourEntry, Scenario)
-│   │   └── response.py        # Pydantic response schemas (Directive, PlanEntry, Response)
-│   ├── services/
+│   │   ├── request.py         # ScenarioRequest, BatterySpec, HourEntry
+│   │   └── response.py        # OptimizeResponse, DirectiveInterpretation, HourlyPlanEntry
+│   ├── models/                # Schema compatibility forwarding namespace
 │   │   ├── __init__.py
-│   │   ├── llm_parser.py      # LLM prompt engineering, few-shot parsing, JSON extractor
-│   │   ├── guardrails.py      # Deterministic validation, sorting, range clamping
-│   │   ├── optimizer.py       # PuLP linear programming model formulation & solve
-│   │   └── replay.py          # Post-optimization balance & physics validator
-│   └── utils/
+│   │   ├── request.py
+│   │   └── response.py
+│   ├── optimizer/             # Core mathematical optimization
+│   │   ├── __init__.py
+│   │   └── optimizer.py       # HiGHS / PuLP MILP formulation & physical balance solve
+│   └── services/              # Processing pipeline stages
 │       ├── __init__.py
-│       └── logger.py          # Structured JSON logging
-└── tests/
-    ├── __init__.py
-    ├── test_api.py            # End-to-end API route tests
-    ├── test_guardrails.py     # Boundary & distractor unit tests
-    └── test_optimizer.py      # LP solver optimality & physics invariant tests
+│       ├── preprocessor.py    # Colloquial time normalization & 2-tier LRU caching
+│       ├── llm_parser.py      # Google GenAI LLM parser with few-shot prompting & failover
+│       ├── guardrails.py      # Deterministic validation, bounds clamping, auto-repair
+│       └── optimizer.py       # Solver namespace alias
+├── tests/                     # Automated test suites
+│   ├── __init__.py
+│   ├── test_api.py            # FastAPI endpoint tests (/health, /optimize-energy)
+│   ├── test_guardrails.py     # Deterministic boundary & distractor unit tests
+│   ├── test_preprocessor.py   # Time/fraction normalization & LRU cache tests
+│   └── test_sample_cases.py   # All 10 official benchmark cases validation
+└── api_benchmark/             # Groq vs Gemini speed benchmark suite
+    ├── README.md
+    └── benchmark.py
 ```
 
 ---
