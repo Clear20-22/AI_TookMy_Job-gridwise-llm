@@ -1,10 +1,3 @@
-"""
-LLM-based interpreter for operator notes → structured directives.
-
-Uses Google Gemini (gemini-2.0-flash) by default.  Falls back to all-no_op
-on any API failure so the optimizer can still produce a valid schedule.
-"""
-
 from __future__ import annotations
 
 import json
@@ -14,116 +7,428 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
-# System prompt — contains all parsing rules from the problem statement
+# System prompt
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """\
-You are an expert energy-systems engineer interpreting operator notes for a \
+SYSTEM_PROMPT = """
+You are an expert energy-systems engineer interpreting operator notes for a
 24-hour campus microgrid scheduling system.
 
-## Your Task
-For EACH operator note, produce exactly ONE JSON object that maps the note to \
-one of six canonical directive types.  Return a JSON **array** with one entry \
-per note, in the same order as the notes.
+Your job is ONLY to interpret the operator notes.
 
-## Directive Types
+For EACH operator note, produce exactly ONE structured directive in the same
+order as the notes.
 
-| directive_type            | applies | structured_adjustment shape                           |
-|---------------------------|---------|-------------------------------------------------------|
-| solar_reduction           | true    | {"hours": [int, ...], "factor": float}                |
-| minimum_battery_reserve   | true    | {"hours": [int, ...], "minimum_energy_kwh": float}    |
-| no_charge_window          | true    | {"hours": [int, ...]}                                 |
-| no_discharge_window       | true    | {"hours": [int, ...]}                                 |
-| max_grid_window           | true    | {"hours": [int, ...], "max_grid_kwh": float}          |
-| no_op                     | false   | null                                                  |
+Supported directive types:
 
-## Critical Parsing Rules
-1. **Time windows are start-inclusive, end-exclusive.**
-   - "1 PM to 3 PM" → hours [13, 14]
-   - "from 6 PM until 9 PM" → hours [18, 19, 20]
-   - "from 11 AM until 1 PM" → hours [11, 12]
-2. **Hours array**: unique integers 0–23, sorted ascending.
-3. **solar_reduction factor** = usable fraction REMAINING.
-   - "80% reduction" → factor = 0.20
-   - "drop to roughly 25%" → factor = 0.25
-   - "reduced to about 30%" → factor = 0.30
-4. **minimum_battery_reserve**: if stated as percentage, compute from battery capacity.
-   - "keep at least 50% capacity" with capacity 200 kWh → minimum_energy_kwh = 100
-5. **Distractor detection**: notes about sports events, cafeteria, next-week plans, \
-or anything unrelated to TODAY's 24-hour energy operations → no_op.
-6. For no_op: applies=false, structured_adjustment=null.
-7. For all others: applies=true.
+1. solar_reduction
+   structured_adjustment:
+   {
+     "hours": [integer, ...],
+     "factor": number
+   }
 
-## Output Schema
-Return ONLY a JSON array (no markdown, no commentary):
-[
-  {
-    "note_index": 0,
-    "applies": true,
-    "directive_type": "solar_reduction",
-    "structured_adjustment": {"hours": [12, 13], "factor": 0.25},
-    "explanation": "Brief reason"
-  }
-]
+2. minimum_battery_reserve
+   structured_adjustment:
+   {
+     "hours": [integer, ...],
+     "minimum_energy_kwh": number
+   }
+
+3. no_charge_window
+   structured_adjustment:
+   {
+     "hours": [integer, ...]
+   }
+
+4. no_discharge_window
+   structured_adjustment:
+   {
+     "hours": [integer, ...]
+   }
+
+5. max_grid_window
+   structured_adjustment:
+   {
+     "hours": [integer, ...],
+     "max_grid_kwh": number
+   }
+
+6. no_op
+   structured_adjustment: null
+
+
+CRITICAL RULES
+
+1. Time windows are START-INCLUSIVE and END-EXCLUSIVE.
+
+Examples:
+
+"1 PM to 3 PM"
+-> hours [13, 14]
+
+"from 6 PM until 9 PM"
+-> hours [18, 19, 20]
+
+"from 11 AM until 1 PM"
+-> hours [11, 12]
+
+
+2. Hours must represent whole-hour intervals using integers 0 through 23.
+
+3. solar_reduction factor means the usable fraction REMAINING.
+
+Examples:
+
+"80% reduction"
+-> factor 0.20
+
+"drop to 25%"
+-> factor 0.25
+
+"reduced to about 30%"
+-> factor 0.30
+
+
+4. minimum_battery_reserve:
+
+If the reserve is expressed as a percentage of battery capacity, convert the
+percentage into kWh using the battery capacity supplied in the user message.
+
+Example:
+
+Battery capacity = 200 kWh
+"keep at least 50% capacity"
+-> minimum_energy_kwh = 100
+
+
+5. Distractors:
+
+Notes unrelated to the CURRENT 24-hour energy schedule must be classified as
+no_op.
+
+Examples include:
+- cafeteria menu changes
+- sports registration changes
+- administrative announcements
+- unrelated future events
+
+
+6. no_op rules:
+
+applies = false
+directive_type = "no_op"
+structured_adjustment = null
+
+
+7. Every other directive:
+
+applies = true
+
+
+8. Never invent:
+- demand
+- solar values
+- tariff values
+- battery limits
+- unsupported directive types
+
+
+Return only data matching the required structured output schema.
 """
 
 
 # ---------------------------------------------------------------------------
-# Fallback: all notes become no_op
+# Custom error
 # ---------------------------------------------------------------------------
 
-def _fallback_no_ops(notes: list[str], reason: str) -> list[dict[str, Any]]:
-    """Return a no_op directive for every note (safe fallback)."""
-    logger.warning("LLM fallback triggered: %s — all notes treated as no_op", reason)
-    return [
-        {
-            "note_index": i,
-            "applies": False,
-            "directive_type": "no_op",
-            "structured_adjustment": None,
-            "explanation": f"LLM unavailable ({reason}); treated as no-op.",
-        }
-        for i in range(len(notes))
+class LLMInterpretationError(RuntimeError):
+    """Raised when no LLM provider/model can interpret the notes."""
+
+
+# ---------------------------------------------------------------------------
+# JSON schemas
+# ---------------------------------------------------------------------------
+
+HOURS_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 23,
+    },
+}
+
+
+def _base_properties(
+    directive_type: str,
+    applies: bool,
+    structured_adjustment: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "note_index": {
+                "type": "integer",
+                "minimum": 0,
+            },
+            "applies": {
+                "type": "boolean",
+                "enum": [applies],
+            },
+            "directive_type": {
+                "type": "string",
+                "enum": [directive_type],
+            },
+            "structured_adjustment": structured_adjustment,
+            "explanation": {
+                "type": "string",
+            },
+        },
+        "required": [
+            "note_index",
+            "applies",
+            "directive_type",
+            "structured_adjustment",
+            "explanation",
+        ],
+        "additionalProperties": False,
+    }
+
+
+SOLAR_REDUCTION_SCHEMA = _base_properties(
+    "solar_reduction",
+    True,
+    {
+        "type": "object",
+        "properties": {
+            "hours": HOURS_SCHEMA,
+            "factor": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+            },
+        },
+        "required": ["hours", "factor"],
+        "additionalProperties": False,
+    },
+)
+
+
+MINIMUM_BATTERY_RESERVE_SCHEMA = _base_properties(
+    "minimum_battery_reserve",
+    True,
+    {
+        "type": "object",
+        "properties": {
+            "hours": HOURS_SCHEMA,
+            "minimum_energy_kwh": {
+                "type": "number",
+                "minimum": 0,
+            },
+        },
+        "required": [
+            "hours",
+            "minimum_energy_kwh",
+        ],
+        "additionalProperties": False,
+    },
+)
+
+
+NO_CHARGE_SCHEMA = _base_properties(
+    "no_charge_window",
+    True,
+    {
+        "type": "object",
+        "properties": {
+            "hours": HOURS_SCHEMA,
+        },
+        "required": ["hours"],
+        "additionalProperties": False,
+    },
+)
+
+
+NO_DISCHARGE_SCHEMA = _base_properties(
+    "no_discharge_window",
+    True,
+    {
+        "type": "object",
+        "properties": {
+            "hours": HOURS_SCHEMA,
+        },
+        "required": ["hours"],
+        "additionalProperties": False,
+    },
+)
+
+
+MAX_GRID_SCHEMA = _base_properties(
+    "max_grid_window",
+    True,
+    {
+        "type": "object",
+        "properties": {
+            "hours": HOURS_SCHEMA,
+            "max_grid_kwh": {
+                "type": "number",
+                "minimum": 0,
+            },
+        },
+        "required": [
+            "hours",
+            "max_grid_kwh",
+        ],
+        "additionalProperties": False,
+    },
+)
+
+
+NO_OP_SCHEMA = _base_properties(
+    "no_op",
+    False,
+    {
+        "type": "null",
+    },
+)
+
+
+DIRECTIVE_ITEM_SCHEMA = {
+    "anyOf": [
+        SOLAR_REDUCTION_SCHEMA,
+        MINIMUM_BATTERY_RESERVE_SCHEMA,
+        NO_CHARGE_SCHEMA,
+        NO_DISCHARGE_SCHEMA,
+        MAX_GRID_SCHEMA,
+        NO_OP_SCHEMA,
     ]
+}
+
+
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "directives": {
+            "type": "array",
+            "items": DIRECTIVE_ITEM_SCHEMA,
+        }
+    },
+    "required": ["directives"],
+    "additionalProperties": False,
+}
 
 
 # ---------------------------------------------------------------------------
-# JSON extraction helper
+# Single Groq call
 # ---------------------------------------------------------------------------
 
-def _extract_json_array(text: str) -> list[dict[str, Any]] | None:
-    """Best-effort extraction of a JSON array from LLM output text."""
-    text = text.strip()
+def _call_groq(
+    *,
+    client: Any,
+    model: str,
+    notes: list[str],
+    battery_capacity_kwh: float,
+) -> list[dict[str, Any]]:
 
-    # Strip markdown code-fence if present
-    if text.startswith("```"):
-        # Remove opening fence (with optional language tag)
-        first_newline = text.index("\n") if "\n" in text else 3
-        text = text[first_newline + 1 :]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
+    user_message = (
+        f"Battery capacity: {battery_capacity_kwh} kWh\n\n"
+        f"Number of operator notes: {len(notes)}\n\n"
+        "Operator notes:\n"
+    )
+
+    for i, note in enumerate(notes):
+        user_message += f"Note {i}: {note}\n"
+
+    user_message += (
+        "\nReturn exactly one directive for each note, "
+        "in note_index order."
+    )
+
+    logger.info(
+        "Sending %d operator notes to Groq model %s",
+        len(notes),
+        model,
+    )
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": user_message,
+            },
+        ],
+
+        # GPT-OSS supports this.
+        reasoning_effort="low",
+
+        # Keep interpretation as deterministic as practical.
+        temperature=0.0,
+
+        # Plenty for 1-3 small JSON directives.
+        max_completion_tokens=1200,
+
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "gridwise_directive_interpretation",
+                "strict": True,
+                "schema": RESPONSE_SCHEMA,
+            },
+        },
+    )
+
+    if not response.choices:
+        raise LLMInterpretationError(
+            f"Groq model {model} returned no choices."
+        )
+
+    raw_text = response.choices[0].message.content
+
+    if not raw_text:
+        raise LLMInterpretationError(
+            f"Groq model {model} returned an empty response."
+        )
+
+    logger.debug(
+        "Groq raw response from %s: %s",
+        model,
+        raw_text,
+    )
 
     try:
-        parsed = json.loads(text)
-        if isinstance(parsed, list):
-            return parsed
-    except json.JSONDecodeError:
-        pass
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise LLMInterpretationError(
+            f"Groq model {model} returned invalid JSON."
+        ) from exc
 
-    # Try to find array substring
-    start = text.find("[")
-    end = text.rfind("]")
-    if start != -1 and end != -1 and end > start:
-        try:
-            parsed = json.loads(text[start : end + 1])
-            if isinstance(parsed, list):
-                return parsed
-        except json.JSONDecodeError:
-            pass
+    directives = payload.get("directives")
 
-    return None
+    if not isinstance(directives, list):
+        raise LLMInterpretationError(
+            "LLM response does not contain a directives array."
+        )
+
+    # Exact number of entries required by the challenge.
+    if len(directives) != len(notes):
+        raise LLMInterpretationError(
+            f"LLM returned {len(directives)} directives "
+            f"for {len(notes)} notes."
+        )
+
+    # Note order is canonical.
+    for i, directive in enumerate(directives):
+        directive["note_index"] = i
+
+    return directives
 
 
 # ---------------------------------------------------------------------------
@@ -134,78 +439,94 @@ def interpret_notes(
     notes: list[str],
     battery_capacity_kwh: float,
 ) -> list[dict[str, Any]]:
+    """
+    Interpret GridWise operator notes using Groq.
 
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    Parameters
+    ----------
+    notes:
+        1-3 natural-language operator notes.
+
+    battery_capacity_kwh:
+        Battery capacity used for percentage-based reserve calculations.
+
+    Returns
+    -------
+    list[dict]:
+        Exactly one structured directive per note.
+
+    Raises
+    ------
+    LLMInterpretationError:
+        If the LLM cannot produce a usable interpretation.
+    """
+
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
 
     if not api_key:
-        return _fallback_no_ops(notes, "GEMINI_API_KEY not set")
+        raise LLMInterpretationError(
+            "GROQ_API_KEY is not configured."
+        )
+
+    primary_model = os.environ.get(
+        "GROQ_MODEL",
+        "openai/gpt-oss-20b",
+    ).strip()
+
+    # Optional backup model.
+    backup_model = os.environ.get(
+        "GROQ_BACKUP_MODEL",
+        "",
+    ).strip()
+
+    models = [primary_model]
+
+    if backup_model and backup_model != primary_model:
+        models.append(backup_model)
 
     try:
-        from google import genai
-        from google.genai import types
+        from groq import Groq
 
-        client = genai.Client(api_key=api_key)
+    except ImportError as exc:
+        raise LLMInterpretationError(
+            "groq package is not installed. Run: pip install groq"
+        ) from exc
 
-        user_message = (
-            f"Battery capacity: {battery_capacity_kwh} kWh\n\n"
-            "Operator notes:\n"
-        )
+    # Groq already retries transient connection/429/5xx errors.
+    client = Groq(
+        api_key=api_key,
+        timeout=20.0,
+        max_retries=2,
+    )
 
-        for i, note in enumerate(notes):
-            user_message += f"Note {i}: {note}\n"
+    last_error: Exception | None = None
 
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=user_message,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                temperature=0.0,
-            ),
-        )
-
-        raw_text = response.text or ""
-
-        logger.debug("LLM raw response: %s", raw_text)
-
-        parsed = _extract_json_array(raw_text)
-
-        if parsed is None:
-            return _fallback_no_ops(
-                notes,
-                "LLM returned unparseable output"
+    for model in models:
+        try:
+            return _call_groq(
+                client=client,
+                model=model,
+                notes=notes,
+                battery_capacity_kwh=battery_capacity_kwh,
             )
 
-        if len(parsed) != len(notes):
-            logger.warning(
-                "LLM returned %d directives for %d notes; padding/truncating",
-                len(parsed),
-                len(notes),
+        except Exception as exc:
+            last_error = exc
+
+            logger.exception(
+                "Groq interpretation failed using model %s",
+                model,
             )
 
-            while len(parsed) < len(notes):
-                parsed.append({
-                    "note_index": len(parsed),
-                    "applies": False,
-                    "directive_type": "no_op",
-                    "structured_adjustment": None,
-                    "explanation":
-                        "Padding: LLM did not return a directive for this note.",
-                })
+            if len(models) > 1:
+                logger.warning(
+                    "Trying next Groq model after failure of %s",
+                    model,
+                )
 
-            parsed = parsed[:len(notes)]
-
-        for i, directive in enumerate(parsed):
-            directive["note_index"] = i
-
-        return parsed
-
-    except ImportError:
-        return _fallback_no_ops(
-            notes,
-            "google-genai package not installed"
-        )
-
-    except Exception as exc:
-        logger.exception("LLM interpretation failed")
-        return _fallback_no_ops(notes, str(exc))
+    # IMPORTANT:
+    # Do NOT silently convert all notes into no_op.
+    # A 500/error is better than returning a logically false schedule.
+    raise LLMInterpretationError(
+        "LLM directive interpretation failed."
+    ) from last_error
