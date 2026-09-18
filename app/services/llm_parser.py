@@ -134,83 +134,78 @@ def interpret_notes(
     notes: list[str],
     battery_capacity_kwh: float,
 ) -> list[dict[str, Any]]:
-    """
-    Use Gemini to interpret operator notes into structured directives.
 
-    Parameters
-    ----------
-    notes : list[str]
-        1–3 operator notes from the request.
-    battery_capacity_kwh : float
-        Battery capacity, included in the prompt so the LLM can convert
-        percentage-based reserves to absolute values.
-
-    Returns
-    -------
-    list[dict]
-        One directive dict per note (may be unvalidated; guardrails come next).
-    """
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+
     if not api_key:
         return _fallback_no_ops(notes, "GEMINI_API_KEY not set")
 
     try:
-        import google.generativeai as genai  # type: ignore
+        from google import genai
+        from google.genai import types
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            "gemini-2.0-flash",
-            system_instruction=SYSTEM_PROMPT,
-        )
+        client = genai.Client(api_key=api_key)
 
         user_message = (
             f"Battery capacity: {battery_capacity_kwh} kWh\n\n"
             "Operator notes:\n"
         )
-        for i, note in enumerate(notes):
-            user_message += f"  Note {i}: {note}\n"
 
-        response = model.generate_content(
-            user_message,
-            generation_config=genai.GenerationConfig(
+        for i, note in enumerate(notes):
+            user_message += f"Note {i}: {note}\n"
+
+        response = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=user_message,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
                 response_mime_type="application/json",
                 temperature=0.0,
             ),
         )
 
-        raw_text = response.text
+        raw_text = response.text or ""
+
         logger.debug("LLM raw response: %s", raw_text)
 
         parsed = _extract_json_array(raw_text)
-        if parsed is None:
-            return _fallback_no_ops(notes, "LLM returned unparseable output")
 
-        # Ensure we have the right count
+        if parsed is None:
+            return _fallback_no_ops(
+                notes,
+                "LLM returned unparseable output"
+            )
+
         if len(parsed) != len(notes):
             logger.warning(
                 "LLM returned %d directives for %d notes; padding/truncating",
                 len(parsed),
                 len(notes),
             )
-            # Pad with no_ops or truncate
+
             while len(parsed) < len(notes):
                 parsed.append({
                     "note_index": len(parsed),
                     "applies": False,
                     "directive_type": "no_op",
                     "structured_adjustment": None,
-                    "explanation": "Padding: LLM did not return a directive for this note.",
+                    "explanation":
+                        "Padding: LLM did not return a directive for this note.",
                 })
-            parsed = parsed[: len(notes)]
 
-        # Ensure note_index is set correctly
-        for i, d in enumerate(parsed):
-            d["note_index"] = i
+            parsed = parsed[:len(notes)]
+
+        for i, directive in enumerate(parsed):
+            directive["note_index"] = i
 
         return parsed
 
     except ImportError:
-        return _fallback_no_ops(notes, "google-generativeai package not installed")
+        return _fallback_no_ops(
+            notes,
+            "google-genai package not installed"
+        )
+
     except Exception as exc:
         logger.exception("LLM interpretation failed")
         return _fallback_no_ops(notes, str(exc))
