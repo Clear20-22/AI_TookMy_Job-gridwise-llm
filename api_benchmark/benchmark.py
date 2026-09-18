@@ -386,7 +386,7 @@ def print_summary(
 def main() -> int:
     p = argparse.ArgumentParser(description="Benchmark Groq vs Gemini streaming latency.")
     p.add_argument("--groq-model", default="llama-3.3-70b-versatile")
-    p.add_argument("--gemini-model", default="gemini-2.0-flash")
+    p.add_argument("--gemini-model", default="gemini-3.5-flash-lite")
     p.add_argument("--runs", type=int, default=2, help="Runs per prompt (>=1). First run is a warm-up.")
     p.add_argument("--warmup", action="store_true", default=True, help="Do one un-timed warm-up call per provider.")
     p.add_argument("--no-warmup", dest="warmup", action="store_false")

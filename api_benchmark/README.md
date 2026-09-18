@@ -22,7 +22,7 @@ API keys are loaded from environment variables (or the parent project's `.env` v
 ## Run
 
 ```bash
-# default: llama-3.3-70b-versatile vs gemini-2.0-flash, 2 runs per prompt
+# default: llama-3.3-70b-versatile vs gemini-3.5-flash-lite, 2 runs per prompt
 python benchmark.py
 
 # more runs for a stable median
