@@ -51,7 +51,7 @@ def _get_solver() -> pulp.LpSolver:
     # 1. Prefer HiGHS (fastest, zero-subprocess, cross-platform)
     try:
         if hasattr(pulp, "HiGHS") and pulp.HiGHS().available():
-            return pulp.HiGHS(msg=False)
+            return pulp.HiGHS(msg=False, timeLimit=5.0, threads=1)
     except Exception:
         pass
 
@@ -101,9 +101,15 @@ def _build_effective_params(
     """
     Walk the directive list once and produce per-hour overrides.
     Supports both flattened directives and official nested structured_adjustment schemas.
+
+    Uses an explicit hour_map keyed by the 'hour' field so the function is
+    correct regardless of list ordering (defensive against unsorted inputs).
     """
+    # Build an explicit map so we never rely on list index == hour number
+    hour_map: dict[int, dict[str, Any]] = {entry["hour"]: entry for entry in hours}
+
     effective_solar: dict[int, float] = {
-        entry["hour"]: entry["solar_kwh"] for entry in hours
+        h: hour_map[h]["solar_kwh"] for h in hour_map
     }
     effective_min_battery: dict[int, float] = {
         h: battery["minimum_energy_kwh"] for h in range(24)
@@ -126,11 +132,11 @@ def _build_effective_params(
         target_hours = adj.get("hours", [])
 
         if dtype == "solar_reduction":
-            # Reduce available solar by a multiplicative factor
+            # Reduce available solar by a multiplicative factor (compounds across directives)
             factor = float(adj.get("factor", 1.0))
             for h in target_hours:
                 if 0 <= h < 24:
-                    effective_solar[h] = hours[h]["solar_kwh"] * factor
+                    effective_solar[h] = effective_solar[h] * factor
 
         elif dtype == "no_charge_window":
             # Battery charging forbidden
@@ -188,6 +194,9 @@ def solve_schedule(
         max_grid_hrs,
     ) = _build_effective_params(hours, battery, directives)
 
+    # Build a safe hour → data map for the LP loop (defensive against unsorted input)
+    hour_map: dict[int, dict[str, Any]] = {entry["hour"]: entry for entry in hours}
+
     H = range(24)
     prob = pulp.LpProblem("GridWise_Schedule", pulp.LpMinimize)
 
@@ -207,12 +216,13 @@ def solve_schedule(
 
     # -- Objective: minimise total grid electricity cost --------------------
     prob += pulp.lpSum(
-        grid[h] * hours[h]["tariff_bdt_per_kwh"] for h in H
+        grid[h] * hour_map[h]["tariff_bdt_per_kwh"] for h in H
     ), "total_grid_cost"
 
     for h in H:
-        demand_h = hours[h]["demand_kwh"]
+        demand_h = hour_map[h]["demand_kwh"]
         tariff_label = f"h{h}"
+
 
         # ---- Constraint 1: energy balance ---------------------------------
         prob += (
@@ -302,11 +312,14 @@ def solve_schedule(
         dc = _clean(discharge[h].varValue)
         be = _clean(bat_energy[h].varValue)
 
-        # Post-solve assertion for constraint 8
-        assert not (ch > 0 and dc > 0), (
-            f"Hour {h}: solver simultaneously charged ({ch}) and "
-            f"discharged ({dc}) — this should never happen."
-        )
+        # Post-solve assertion for constraint 8 (charge/discharge mutual exclusion)
+        # Use an explicit check instead of assert — assert is silently disabled
+        # when Python is run with the -O (optimise) flag in production containers.
+        if ch > 0 and dc > 0:
+            raise OptimizationError(
+                f"Hour {h}: solver simultaneously charged ({ch} kWh) and "
+                f"discharged ({dc} kWh) — mutual exclusion constraint violated."
+            )
 
         action = _battery_action(ch, dc)
         bat_kwh = ch if action == "charge" else dc  # magnitude of flow
@@ -321,7 +334,7 @@ def solve_schedule(
         })
 
         total_grid += g
-        total_cost += g * hours[h]["tariff_bdt_per_kwh"]
+        total_cost += g * hour_map[h]["tariff_bdt_per_kwh"]
         peak_grid = max(peak_grid, g)
 
     return {

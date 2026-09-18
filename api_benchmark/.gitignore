@@ -1,0 +1,4 @@
+# benchmark outputs (may contain response text)
+results.json
+*.json
+!.gitkeep

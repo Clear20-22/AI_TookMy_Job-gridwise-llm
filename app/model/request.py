@@ -32,6 +32,18 @@ class ScenarioRequest(BaseModel):
     hours: list[HourEntry] = Field(..., min_length=24, max_length=24)
     battery: BatterySpec
 
+    @field_validator("operator_notes")
+    @classmethod
+    def validate_notes_not_blank(cls, v: list[str]) -> list[str]:
+        """Ensure no note is an empty or whitespace-only string."""
+        for i, note in enumerate(v):
+            if not note.strip():
+                raise ValueError(
+                    f"operator_notes[{i}] is blank or whitespace-only. "
+                    "All notes must contain meaningful text."
+                )
+        return v
+
     @field_validator("hours")
     @classmethod
     def validate_hours_coverage(cls, v: list[HourEntry]) -> list[HourEntry]:
@@ -47,3 +59,4 @@ class ScenarioRequest(BaseModel):
             )
         # Sort by hour for consistent processing
         return sorted(v, key=lambda e: e.hour)
+

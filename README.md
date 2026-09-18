@@ -3,12 +3,12 @@
 > **BUP CSE Fest 2026 · Hackathon · Online Preliminary Round**  
 > *Organized by Bangladesh University of Professionals (BUP) Dept. of CSE, in association with Poridhi.io*
 
-[![Tests](https://img.shields.io/badge/Tests-129%20Passed-brightgreen.svg)](#-sample-test-verification)
+[![Tests](https://img.shields.io/badge/Tests-140%20Passed-brightgreen.svg)](#-sample-test-verification)
 [![Benchmark](https://img.shields.io/badge/Benchmark-10%2F10%20Optimal-success.svg)](#-official-sample-case-benchmark)
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/Framework-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
-[![Optimization](https://img.shields.io/badge/Solver-PuLP%20%7C%20CBC-orange.svg)](https://coin-or.github.io/pulp/)
+[![Optimization](https://img.shields.io/badge/Solver-HiGHS%20%7C%20PuLP-orange.svg)](https://highs.dev/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -291,10 +291,8 @@ The application supports multiple LLM inference providers, configurable via envi
 | :--- | :---: | :---: | :--- |
 | `PORT` | Integer | `8000` | HTTP port on which the server binds. |
 | `HOST` | String | `0.0.0.0` | Host IP address for network binding. |
-| `LLM_PROVIDER` | String | `gemini` | LLM backend: `gemini`, `openai`, `anthropic`, or `ollama`. |
-| `GEMINI_API_KEY` | String | *Required* | API key for Google Gemini (`gemini-1.5-pro` or `gemini-2.0-flash`). |
-| `OPENAI_API_KEY` | String | *Optional* | API key if using OpenAI GPT models (`gpt-4o`, `gpt-4o-mini`). |
-| `ANTHROPIC_API_KEY`| String | *Optional* | API key if using Claude models. |
+| `GEMINI_API_KEY` | String | *Required* | API key for Google Gemini (`https://aistudio.google.com/app/apikey`). |
+| `GEMINI_MODEL` | String | `gemini-3.5-flash-lite` | Active Google Gemini model (`gemini-3.5-flash-lite`, `gemini-flash-lite-latest`, `gemini-3.6-flash`). |
 | `SOLVER_TIMEOUT_SEC` | Integer | `10` | Maximum solver execution timeout in seconds. |
 | `LOG_LEVEL` | String | `INFO` | Application logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 
