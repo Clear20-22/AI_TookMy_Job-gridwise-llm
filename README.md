@@ -1,3 +1,11 @@
+# ⚠️ WORK IN PROGRESS
+
+> **This repository is currently under active development for the BUP CSE Fest 2026 Preliminary Round.**
+> **The README below describes the *target* architecture and API contract. Source code is not yet committed.**
+> **Last updated:** 2026-09-18
+
+---
+
 # GridWise LLM — Smart Campus Energy Optimization Microservice
 
 > **BUP CSE Fest 2026 · Hackathon · Online Preliminary Round**  
