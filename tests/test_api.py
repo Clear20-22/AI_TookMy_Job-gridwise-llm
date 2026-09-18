@@ -45,35 +45,39 @@ def test_optimize_energy_invalid_hours():
 
 
 def test_optimize_energy_end_to_end_sample_01():
-    """End-to-end test on sample case 01 with mock LLM returning parsed directives."""
-    with open(SAMPLE_DIR / "sample-case-01.json", encoding="utf-8") as f:
-        sample_data = json.load(f)
+    """End-to-end test on official sample case 01 with mock LLM returning parsed directives."""
+    cases_path = Path(__file__).resolve().parent.parent / "BUP_CSE_FEST_2026_Preli_Public_Sample_Cases.json"
+    with open(cases_path, encoding="utf-8") as f:
+        cases_data = json.load(f)
+
+    sample_01 = cases_data["cases"][0]
+    c_input = sample_01["input"]
+    c_expected = sample_01["expected_output"]
 
     # Mock the LLM to return the expected directive interpretation
-    mock_interpretation = sample_data["expected_directive_interpretation"]
-    with patch("app.main.interpret_directives", return_value=mock_interpretation):
+    mock_interpretation = c_expected["directive_interpretation"]
+    with patch("app.main.interpret_notes", return_value=mock_interpretation):
         response = client.post(
             "/optimize-energy",
-            json={
-                "battery": sample_data["battery"],
-                "hourly": sample_data["hourly"],
-                "operator_notes": sample_data["operator_notes"],
-            },
+            json=c_input,
         )
 
     assert response.status_code == 200
     data = response.json()
 
-    # Check response structure
-    assert "hourly_schedule" in data
-    assert "cost_summary" in data
-    assert "battery_metrics" in data
-    assert "solver_metadata" in data
+    # Check official BUP CSE Fest response structure
+    assert data["scenario_id"] == "SAMPLE-01"
     assert "directive_interpretation" in data
+    assert "hourly_plan" in data
+    assert "total_cost_bdt" in data
+    assert "total_grid_kwh" in data
+    assert "peak_grid_kwh" in data
+    assert "plan_summary" in data
 
-    assert len(data["hourly_schedule"]) == 24
-    assert data["solver_metadata"]["status"] == "optimal"
+    assert len(data["hourly_plan"]) == 24
+    assert len(data["directive_interpretation"]) == 2
 
-    # Energy balance and cost within tolerance
-    expected_cost = sample_data["expected_cost_summary"]["total_cost"]
-    assert abs(data["cost_summary"]["total_cost"] - expected_cost) <= 0.05 * expected_cost + 1.0
+    # Cost within tolerance of organizer reference
+    expected_cost = c_expected["total_cost_bdt"]
+    assert abs(data["total_cost_bdt"] - expected_cost) <= 0.05
+

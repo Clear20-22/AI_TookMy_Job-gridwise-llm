@@ -128,7 +128,7 @@ class TestNoDirectives:
 ALL_DIRECTIVES = [
     {"type": "solar_reduction",        "hours": [13, 14], "factor": 0.2},
     {"type": "no_charge_window",       "hours": [14, 15]},
-    {"type": "no_discharge_window",    "hours": [18, 19]},
+    {"type": "no_discharge_window",    "hours": [16, 17]},
     {"type": "minimum_battery_reserve","hours": [18, 19, 20], "minimum_energy_kwh": 120},
     {"type": "max_grid_window",        "hours": [19, 20, 21], "max_grid_kwh": 400},
 ]
@@ -167,8 +167,8 @@ class TestAllDirectives:
 
     # -- Directive: no_discharge_window -------------------------------------
     def test_no_discharge_window_respected(self):
-        """Hours 18 & 19 must have zero discharging."""
-        for h in [18, 19]:
+        """Hours 16 & 17 must have zero discharging."""
+        for h in [16, 17]:
             entry = self.by_hour[h]
             assert entry["battery_action"] != "discharge", (
                 f"Hour {h}: battery should not discharge"
@@ -225,5 +225,68 @@ class TestInfeasibility:
         impossible_directives = [
             {"type": "max_grid_window", "hours": list(range(24)), "max_grid_kwh": 0},
         ]
-        with pytest.raises(OptimizationError, match="infeasible"):
+        with pytest.raises(OptimizationError, match="[Ii]nfeasible"):
             solve_schedule(HOURS_DATA, BATTERY, directives=impossible_directives)
+
+
+# ---------------------------------------------------------------------------
+# Case 4 — BUP CSE Fest 2026 Official Public Sample Cases Benchmark (10/10)
+# ---------------------------------------------------------------------------
+
+import json
+import os
+
+SAMPLE_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "BUP_CSE_FEST_2026_Preli_Public_Sample_Cases.json",
+)
+
+
+@pytest.mark.skipif(not os.path.exists(SAMPLE_FILE), reason="Sample cases file not found")
+class TestPublicSampleCases:
+    """Validate optimizer against all 10 official BUP CSE Fest public sample cases."""
+
+    with open(SAMPLE_FILE) as _f:
+        _cases = json.load(_f)["cases"]
+
+    @pytest.mark.parametrize("case", _cases, ids=[c["id"] for c in _cases])
+    def test_official_sample_case_optimal(self, case):
+        c_input = case["input"]
+        c_expected = case["expected_output"]
+
+        result = solve_schedule(
+            hours=c_input["hours"],
+            battery=c_input["battery"],
+            directives=c_expected["directive_interpretation"],
+        )
+
+        # 1. Optimal cost match (tolerance 0.05 BDT)
+        expected_cost = c_expected["total_cost_bdt"]
+        assert abs(result["total_cost_bdt"] - expected_cost) <= 0.05, (
+            f"Case {case['id']}: cost {result['total_cost_bdt']} != expected {expected_cost}"
+        )
+
+        # 2. Total grid energy match
+        expected_grid = c_expected["total_grid_kwh"]
+        assert abs(result["total_grid_kwh"] - expected_grid) <= 0.05, (
+            f"Case {case['id']}: grid {result['total_grid_kwh']} != expected {expected_grid}"
+        )
+
+        # 3. Hourly energy balance
+        for entry in result["hourly_plan"]:
+            h = entry["hour"]
+            demand = c_input["hours"][h]["demand_kwh"]
+            supply = entry["grid_kwh"] + entry["solar_used_kwh"]
+            if entry["battery_action"] == "discharge":
+                supply += entry["battery_kwh"]
+            sink = demand
+            if entry["battery_action"] == "charge":
+                sink += entry["battery_kwh"]
+            assert abs(supply - sink) < 0.05, f"Hour {h} balance violated in {case['id']}"
+
+        # 4. End-of-day battery neutrality
+        initial_e = c_input["battery"]["initial_energy_kwh"]
+        final_e = result["hourly_plan"][23]["battery_energy_after_kwh"]
+        assert abs(final_e - initial_e) < 0.05, (
+            f"Case {case['id']}: end-of-day SoC {final_e} != initial {initial_e}"
+        )
