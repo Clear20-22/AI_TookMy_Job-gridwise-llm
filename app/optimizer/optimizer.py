@@ -35,6 +35,54 @@ def _battery_action(charge: float, discharge: float) -> str:
     return "idle"
 
 
+def _get_solver() -> pulp.LpSolver:
+    """
+    Select the optimal, robust LP solver for both cloud deployment (Linux / Docker / VPS / PaaS)
+    and local development (macOS / Windows).
+
+    Hierarchy:
+      1. HiGHS (highspy): In-process C++ binding, fastest open-source solver, cross-platform
+         (Linux x86_64, Linux aarch64, macOS Apple Silicon / Intel, Windows).
+      2. PULP_CBC_CMD: Standard bundled CBC solver on Linux/Docker.
+      3. COIN_CMD: System-level COIN-OR CBC (/usr/bin/cbc).
+      4. GLPK_CMD: System-level GNU GLPK (/usr/bin/glpsol).
+      5. Default PuLP fallback.
+    """
+    # 1. Prefer HiGHS (fastest, zero-subprocess, cross-platform)
+    try:
+        if hasattr(pulp, "HiGHS") and pulp.HiGHS().available():
+            return pulp.HiGHS(msg=False)
+    except Exception:
+        pass
+
+    # 2. Standard PuLP CBC binary (works natively on Linux/Docker)
+    try:
+        cbc = pulp.PULP_CBC_CMD(msg=False)
+        if cbc.available():
+            return cbc
+    except Exception:
+        pass
+
+    # 3. System-installed CBC on Linux (e.g. apt-get install -y coinor-cbc)
+    try:
+        coin = pulp.COIN_CMD(msg=False)
+        if coin.available():
+            return coin
+    except Exception:
+        pass
+
+    # 4. System-installed GLPK (e.g. apt-get install -y glpk-utils)
+    try:
+        glpk = pulp.GLPK_CMD(msg=False)
+        if glpk.available():
+            return glpk
+    except Exception:
+        pass
+
+    # 5. Default fallback
+    return pulp.PULP_CBC_CMD(msg=False)
+
+
 # ---------------------------------------------------------------------------
 # Pre-processing: build per-hour effective parameters from directives
 # ---------------------------------------------------------------------------
@@ -52,6 +100,7 @@ def _build_effective_params(
 ]:
     """
     Walk the directive list once and produce per-hour overrides.
+    Supports both flattened directives and official nested structured_adjustment schemas.
     """
     effective_solar: dict[int, float] = {
         entry["hour"]: entry["solar_kwh"] for entry in hours
@@ -64,38 +113,55 @@ def _build_effective_params(
     max_grid: dict[int, float] = {}  # only populated for constrained hours
 
     for d in directives:
-        dtype = d["type"]
+        # Ignore no_op or directives with applies == False
+        if d.get("applies") is False:
+            continue
+
+        dtype = d.get("directive_type") or d.get("type")
+        adj = d.get("structured_adjustment") or d
+
+        if not adj or dtype == "no_op":
+            continue
+
+        target_hours = adj.get("hours", [])
 
         if dtype == "solar_reduction":
-            # Rule 2 — reduce available solar by a multiplicative factor
-            for h in d["hours"]:
-                effective_solar[h] = hours[h]["solar_kwh"] * d["factor"]
+            # Reduce available solar by a multiplicative factor
+            factor = float(adj.get("factor", 1.0))
+            for h in target_hours:
+                if 0 <= h < 24:
+                    effective_solar[h] = hours[h]["solar_kwh"] * factor
 
         elif dtype == "no_charge_window":
-            # Rule 6a — battery charging forbidden
-            for h in d["hours"]:
-                no_charge_hours.add(h)
+            # Battery charging forbidden
+            for h in target_hours:
+                if 0 <= h < 24:
+                    no_charge_hours.add(h)
 
         elif dtype == "no_discharge_window":
-            # Rule 6b — battery discharging forbidden
-            for h in d["hours"]:
-                no_discharge_hours.add(h)
+            # Battery discharging forbidden
+            for h in target_hours:
+                if 0 <= h < 24:
+                    no_discharge_hours.add(h)
 
         elif dtype == "minimum_battery_reserve":
-            # Rule 4 — tighter lower bound on battery SoE
-            for h in d["hours"]:
-                effective_min_battery[h] = max(
-                    effective_min_battery[h], d["minimum_energy_kwh"]
-                )
+            # Tighter lower bound on battery energy
+            min_energy = float(adj.get("minimum_energy_kwh", battery["minimum_energy_kwh"]))
+            for h in target_hours:
+                if 0 <= h < 24:
+                    effective_min_battery[h] = max(
+                        effective_min_battery[h], min_energy
+                    )
 
         elif dtype == "max_grid_window":
-            # Rule 6c — cap on grid purchase
-            for h in d["hours"]:
-                # If multiple directives apply, keep the tightest cap
-                if h in max_grid:
-                    max_grid[h] = min(max_grid[h], d["max_grid_kwh"])
-                else:
-                    max_grid[h] = d["max_grid_kwh"]
+            # Cap on grid purchase
+            cap = float(adj.get("max_grid_kwh", float("inf")))
+            for h in target_hours:
+                if 0 <= h < 24:
+                    if h in max_grid:
+                        max_grid[h] = min(max_grid[h], cap)
+                    else:
+                        max_grid[h] = cap
 
     return effective_solar, effective_min_battery, no_charge_hours, no_discharge_hours, max_grid
 
@@ -214,7 +280,7 @@ def solve_schedule(
     )
 
     # -- Solve --------------------------------------------------------------
-    prob.solve(pulp.PULP_CBC_CMD(msg=0))
+    prob.solve(_get_solver())
 
     status = pulp.LpStatus[prob.status]
     if status != "Optimal":

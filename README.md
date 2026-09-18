@@ -1,15 +1,10 @@
-# ⚠️ WORK IN PROGRESS
-
-> **This repository is currently under active development for the BUP CSE Fest 2026 Preliminary Round.**
-> **The README below describes the *target* architecture and API contract. Source code is not yet committed.**
-> **Last updated:** 2026-09-18
-
----
-
 # GridWise LLM — Smart Campus Energy Optimization Microservice
 
 > **BUP CSE Fest 2026 · Hackathon · Online Preliminary Round**  
 > *Organized by Bangladesh University of Professionals (BUP) Dept. of CSE, in association with Poridhi.io*
+
+[![Tests](https://img.shields.io/badge/Tests-129%20Passed-brightgreen.svg)](#-sample-test-verification)
+[![Benchmark](https://img.shields.io/badge/Benchmark-10%2F10%20Optimal-success.svg)](#-official-sample-case-benchmark)
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/Framework-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
