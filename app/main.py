@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
 
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 
@@ -17,7 +19,7 @@ from app.model.response import (
 )
 from app.optimizer import OptimizationError, solve_schedule
 from app.services.guardrails import directives_to_optimizer_format, validate_directives
-from app.services.llm_parser import interpret_notes
+from app.services.llm_parser import get_generative_model, interpret_notes
 
 # Load .env file if present
 load_dotenv()
@@ -29,10 +31,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Warm up the Gemini model singleton at startup to eliminate cold-start latency."""
+    try:
+        model = get_generative_model()
+        if model is not None:
+            logger.info("Gemini model singleton pre-warmed successfully")
+    except Exception as exc:
+        logger.warning("Could not pre-warm Gemini model at startup: %s", exc)
+    yield
+
+
 app = FastAPI(
     title="GridWise LLM",
     description="Smart campus energy optimization microservice.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 
@@ -49,23 +65,24 @@ def health_check() -> dict[str, str]:
 
 
 @app.post("/optimize-energy", tags=["core"], response_model=OptimizeResponse)
-def optimize_energy(request: ScenarioRequest) -> OptimizeResponse:
+async def optimize_energy(request: ScenarioRequest) -> OptimizeResponse:
     """
     Accept a scenario and return the optimal 24-hour energy schedule.
 
     Pipeline:
-        1. LLM interprets operator notes → raw directives
-        2. Guardrails validate and normalise directives
-        3. LP solver optimises the schedule
+        1. LLM interprets operator notes → raw directives  (async via thread)
+        2. Guardrails validate and normalise directives     (sync, fast)
+        3. LP solver optimises the schedule                (async via thread)
         4. Response is assembled and returned
     """
     logger.info("Processing scenario %s with %d notes", request.scenario_id, len(request.operator_notes))
 
-    # ---- Stage 1: LLM Interpretation -------------------------------------
+    # ---- Stage 1: LLM Interpretation (runs in thread pool) ---------------
     try:
-        raw_directives = interpret_notes(
-            notes=request.operator_notes,
-            battery_capacity_kwh=request.battery.capacity_kwh,
+        raw_directives = await asyncio.to_thread(
+            interpret_notes,
+            request.operator_notes,
+            request.battery.capacity_kwh,
         )
     except Exception as exc:
         logger.exception("LLM interpretation failed for scenario %s", request.scenario_id)
@@ -76,7 +93,7 @@ def optimize_energy(request: ScenarioRequest) -> OptimizeResponse:
                 "applies": False,
                 "directive_type": "no_op",
                 "structured_adjustment": None,
-                "explanation": f"LLM error: {exc}",
+                "explanation": "LLM processing unavailable; safely demoted to no-op.",
             }
             for i in range(len(request.operator_notes))
         ]
@@ -110,10 +127,15 @@ def optimize_energy(request: ScenarioRequest) -> OptimizeResponse:
     }
 
     try:
-        solver_result = solve_schedule(hours_data, battery_data, optimizer_directives)
+        solver_result = await asyncio.to_thread(
+            solve_schedule, hours_data, battery_data, optimizer_directives
+        )
     except OptimizationError as exc:
         logger.error("Solver failed for scenario %s: %s", request.scenario_id, exc)
-        raise HTTPException(status_code=500, detail=f"Optimization failed: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Optimization failed: problem is infeasible under provided constraints.",
+        )
 
     # ---- Stage 4: Assemble response --------------------------------------
     directive_interpretations = [

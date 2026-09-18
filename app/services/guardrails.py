@@ -43,17 +43,31 @@ def _make_no_op(note_index: int, reason: str) -> dict[str, Any]:
 
 def _validate_hours(hours: Any) -> list[int] | None:
     """Return a sorted, deduplicated list of ints in [0, 23], or None on failure."""
-    if not isinstance(hours, list):
+    if isinstance(hours, str):
+        import re
+        match_range = re.match(r"^(\d{1,2})\s*[-–—]\s*(\d{1,2})$", hours.strip())
+        if match_range:
+            start_h, end_h = int(match_range.group(1)), int(match_range.group(2))
+            hours = list(range(start_h, end_h))
+        else:
+            hours = [h.strip() for h in hours.split(",") if h.strip()]
+
+    if not isinstance(hours, (list, tuple)):
         return None
+
     clean: list[int] = []
     for h in hours:
-        if not isinstance(h, (int, float)):
-            return None
-        h_int = int(h)
-        if h_int < 0 or h_int > 23:
-            return None
-        clean.append(h_int)
-    # De-duplicate and sort
+        try:
+            h_int = int(float(str(h).strip()))
+            if 0 <= h_int <= 23:
+                clean.append(h_int)
+        except (ValueError, TypeError):
+            continue
+
+    if not clean:
+        return None
+
+    # De-duplicate and sort ascending
     return sorted(set(clean))
 
 
@@ -121,9 +135,16 @@ def validate_directives(
             )
             continue
 
-        # ---- Type-specific validation -------------------------------------
+        # ---- Type-specific validation & auto-repair -----------------------
         if dtype == "solar_reduction":
             factor = adj.get("factor")
+            if isinstance(factor, str):
+                try:
+                    factor = float(factor.replace("%", "").strip())
+                    if factor > 1.0:
+                        factor = factor / 100.0
+                except ValueError:
+                    factor = None
             if not isinstance(factor, (int, float)):
                 validated.append(
                     _make_no_op(note_index, "solar_reduction missing numeric factor")
@@ -136,11 +157,16 @@ def validate_directives(
                 "applies": True,
                 "directive_type": "solar_reduction",
                 "structured_adjustment": {"hours": hours, "factor": factor},
-                "explanation": raw.get("explanation", ""),
+                "explanation": raw.get("explanation", "Solar availability reduced."),
             })
 
         elif dtype == "minimum_battery_reserve":
             min_e = adj.get("minimum_energy_kwh")
+            if isinstance(min_e, str):
+                try:
+                    min_e = float(min_e.replace("kWh", "").replace("%", "").strip())
+                except ValueError:
+                    min_e = None
             if not isinstance(min_e, (int, float)):
                 validated.append(
                     _make_no_op(
@@ -149,8 +175,12 @@ def validate_directives(
                     )
                 )
                 continue
+            min_e = float(min_e)
+            # Auto-repair: if passed as fraction <= 1.0 (e.g. 0.50), scale by capacity
+            if 0.0 < min_e <= 1.0 and battery_capacity_kwh > 1.0:
+                min_e = min_e * battery_capacity_kwh
             # Clamp to [battery_minimum, capacity]
-            min_e = max(battery_minimum_kwh, min(battery_capacity_kwh, float(min_e)))
+            min_e = max(battery_minimum_kwh, min(battery_capacity_kwh, min_e))
             validated.append({
                 "note_index": note_index,
                 "applies": True,
@@ -159,11 +189,16 @@ def validate_directives(
                     "hours": hours,
                     "minimum_energy_kwh": min_e,
                 },
-                "explanation": raw.get("explanation", ""),
+                "explanation": raw.get("explanation", "Minimum battery reserve requirement."),
             })
 
         elif dtype == "max_grid_window":
             max_g = adj.get("max_grid_kwh")
+            if isinstance(max_g, str):
+                try:
+                    max_g = float(max_g.replace("kWh", "").strip())
+                except ValueError:
+                    max_g = None
             if not isinstance(max_g, (int, float)):
                 validated.append(
                     _make_no_op(
@@ -178,19 +213,20 @@ def validate_directives(
                 "applies": True,
                 "directive_type": "max_grid_window",
                 "structured_adjustment": {"hours": hours, "max_grid_kwh": max_g},
-                "explanation": raw.get("explanation", ""),
+                "explanation": raw.get("explanation", "Grid import constraint."),
             })
 
         elif dtype in ("no_charge_window", "no_discharge_window"):
-            # Only hours needed — already validated above
             validated.append({
                 "note_index": note_index,
                 "applies": True,
                 "directive_type": dtype,
                 "structured_adjustment": {"hours": hours},
-                "explanation": raw.get("explanation", ""),
+                "explanation": raw.get("explanation", f"{dtype} active."),
             })
 
+    # Ensure strictly sorted by note_index
+    validated.sort(key=lambda d: d.get("note_index", 0))
     return validated
 
 

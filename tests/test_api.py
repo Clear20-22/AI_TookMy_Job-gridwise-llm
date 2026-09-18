@@ -81,3 +81,24 @@ def test_optimize_energy_end_to_end_sample_01():
     expected_cost = c_expected["total_cost_bdt"]
     assert abs(data["total_cost_bdt"] - expected_cost) <= 0.05
 
+
+def test_optimize_energy_graceful_llm_failure():
+    """When LLM fails completely, all notes degrade to no_op and optimizer still produces a valid schedule."""
+    cases_path = Path(__file__).resolve().parent.parent / "BUP_CSE_FEST_2026_Preli_Public_Sample_Cases.json"
+    with open(cases_path, encoding="utf-8") as f:
+        cases_data = json.load(f)
+
+    sample_01 = cases_data["cases"][0]
+    with patch("app.main.interpret_notes", side_effect=RuntimeError("Provider offline")):
+        response = client.post("/optimize-energy", json=sample_01["input"])
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["directive_interpretation"]) == len(sample_01["input"]["operator_notes"])
+    for d in data["directive_interpretation"]:
+        assert d["directive_type"] == "no_op"
+        assert d["applies"] is False
+        assert d["structured_adjustment"] is None
+    assert len(data["hourly_plan"]) == 24
+    assert data["total_cost_bdt"] > 0
+
