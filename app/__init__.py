@@ -1,0 +1,2 @@
+"""GridWise LLM FastAPI application."""
+
