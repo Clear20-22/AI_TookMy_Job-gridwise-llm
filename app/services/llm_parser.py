@@ -31,13 +31,12 @@ from app.services.preprocessor import (
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
 # System prompt — contains parsing rules, few-shot exemplars, and token limits
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """
-You are an expert energy-systems engineer interpreting operator notes for a
+SYSTEM_PROMPT = """\
+You are an expert energy-systems engineer interpreting operator notes for a \
 24-hour campus microgrid scheduling system.
 
 ## Your Task
@@ -204,7 +203,7 @@ def reset_model_singleton() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Custom error
+# Fallback: all notes become no_op
 # ---------------------------------------------------------------------------
 
 def _fallback_no_ops(notes: list[str], reason: str) -> list[dict[str, Any]]:
@@ -220,90 +219,15 @@ def _fallback_no_ops(notes: list[str], reason: str) -> list[dict[str, Any]]:
         }
         for i in range(len(notes))
     ]
-}
-
-
-RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "directives": {
-            "type": "array",
-            "items": DIRECTIVE_ITEM_SCHEMA,
-        }
-    },
-    "required": ["directives"],
-    "additionalProperties": False,
-}
 
 
 # ---------------------------------------------------------------------------
-# Single Groq call
+# JSON extraction helper
 # ---------------------------------------------------------------------------
 
-def _call_groq(
-    *,
-    client: Any,
-    model: str,
-    notes: list[str],
-    battery_capacity_kwh: float,
-) -> list[dict[str, Any]]:
-
-    user_message = (
-        f"Battery capacity: {battery_capacity_kwh} kWh\n\n"
-        f"Number of operator notes: {len(notes)}\n\n"
-        "Operator notes:\n"
-    )
-
-    for i, note in enumerate(notes):
-        user_message += f"Note {i}: {note}\n"
-
-    user_message += (
-        "\nReturn exactly one directive for each note, "
-        "in note_index order."
-    )
-
-    logger.info(
-        "Sending %d operator notes to Groq model %s",
-        len(notes),
-        model,
-    )
-
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": user_message,
-            },
-        ],
-
-        # GPT-OSS supports this.
-        reasoning_effort="low",
-
-        # Keep interpretation as deterministic as practical.
-        temperature=0.0,
-
-        # Plenty for 1-3 small JSON directives.
-        max_completion_tokens=1200,
-
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": "gridwise_directive_interpretation",
-                "strict": True,
-                "schema": RESPONSE_SCHEMA,
-            },
-        },
-    )
-
-    if not response.choices:
-        raise LLMInterpretationError(
-            f"Groq model {model} returned no choices."
-        )
+def _extract_json_array(text: str) -> list[dict[str, Any]] | None:
+    """Best-effort extraction of a JSON array from LLM output text."""
+    text = text.strip()
 
     # Strip markdown code-fence robustly (handles ```json, ```JSON, ``` etc.)
     m = _FENCE_RE.match(text)
@@ -328,25 +252,7 @@ def _call_groq(
         except json.JSONDecodeError:
             pass
 
-    directives = payload.get("directives")
-
-    if not isinstance(directives, list):
-        raise LLMInterpretationError(
-            "LLM response does not contain a directives array."
-        )
-
-    # Exact number of entries required by the challenge.
-    if len(directives) != len(notes):
-        raise LLMInterpretationError(
-            f"LLM returned {len(directives)} directives "
-            f"for {len(notes)} notes."
-        )
-
-    # Note order is canonical.
-    for i, directive in enumerate(directives):
-        directive["note_index"] = i
-
-    return directives
+    return None
 
 
 # ---------------------------------------------------------------------------
