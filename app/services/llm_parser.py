@@ -158,8 +158,9 @@ def interpret_notes(
         import google.generativeai as genai  # type: ignore
 
         genai.configure(api_key=api_key)
+        model_name = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
         model = genai.GenerativeModel(
-            "gemini-2.0-flash",
+            model_name,
             system_instruction=SYSTEM_PROMPT,
         )
 
