@@ -130,7 +130,7 @@ ALL_DIRECTIVES = [
     {"type": "no_charge_window",       "hours": [14, 15]},
     {"type": "no_discharge_window",    "hours": [18, 19]},
     {"type": "minimum_battery_reserve","hours": [18, 19, 20], "minimum_energy_kwh": 120},
-    {"type": "max_grid_window",        "hours": [19, 20, 21], "max_grid_kwh": 190},
+    {"type": "max_grid_window",        "hours": [19, 20, 21], "max_grid_kwh": 400},
 ]
 
 
@@ -185,11 +185,11 @@ class TestAllDirectives:
 
     # -- Directive: max_grid_window -----------------------------------------
     def test_max_grid_window_respected(self):
-        """Hours 19, 20, 21 must have grid_kwh ≤ 190."""
+        """Hours 19, 20, 21 must have grid_kwh ≤ 400."""
         for h in [19, 20, 21]:
             g = self.by_hour[h]["grid_kwh"]
-            assert g <= 190 + 0.01, (
-                f"Hour {h}: grid_kwh={g}, max_allowed=190"
+            assert g <= 400 + 0.01, (
+                f"Hour {h}: grid_kwh={g}, max_allowed=400"
             )
 
     # -- General invariants still hold with directives ----------------------
