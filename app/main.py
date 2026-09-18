@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Any
 
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 
@@ -17,7 +18,7 @@ from app.model.response import (
 )
 from app.optimizer import OptimizationError, solve_schedule
 from app.services.guardrails import directives_to_optimizer_format, validate_directives
-from app.services.llm_parser import interpret_notes
+from app.services.llm_parser import get_generative_model, interpret_notes
 
 # Load .env file if present
 load_dotenv()
@@ -29,10 +30,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Warm up the Gemini model singleton at startup to eliminate cold-start latency."""
+    try:
+        model = get_generative_model()
+        if model is not None:
+            logger.info("Gemini model singleton pre-warmed successfully")
+    except Exception as exc:
+        logger.warning("Could not pre-warm Gemini model at startup: %s", exc)
+    yield
+
+
 app = FastAPI(
     title="GridWise LLM",
     description="Smart campus energy optimization microservice.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 
