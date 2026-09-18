@@ -14,5 +14,9 @@ htmlcov/
 .git
 .gitignore
 .env
+.env.*
 tests/
+docs/
+api_benchmark/
 sample_cases/
+.DS_Store

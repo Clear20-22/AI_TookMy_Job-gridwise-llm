@@ -51,12 +51,14 @@ pytest -v
 
 ## 4. Docker Deployment
 
-### Build the Docker image
+### Pull and Run from Docker Hub
 ```bash
-docker build -t gridwise-llm .
+docker pull s0jib/gridwise-llm:latest
+docker run -d -p 8000:8000 -e GEMINI_API_KEY="your-api-key" s0jib/gridwise-llm:latest
 ```
 
-### Run the Docker container
+### Or Build Locally
 ```bash
-docker run -p 8000:8000 -e GEMINI_API_KEY="your-api-key" gridwise-llm
+docker build -t s0jib/gridwise-llm:latest .
+docker run -d -p 8000:8000 -e GEMINI_API_KEY="your-api-key" s0jib/gridwise-llm:latest
 ```

@@ -245,13 +245,13 @@ A production-ready Docker container is provided as a fallback execution artifact
 
 ### Pull and Run from Registry
 ```bash
-docker pull clear20/gridwise-llm:latest
+docker pull s0jib/gridwise-llm:latest
 
 docker run -d \
   --name gridwise-service \
   -p 8000:8000 \
   -e GEMINI_API_KEY="your-api-key-here" \
-  clear20/gridwise-llm:latest
+  s0jib/gridwise-llm:latest
 ```
 
 ### Build and Run Locally
@@ -395,7 +395,7 @@ This repository achieves full marks across all 7 evaluation categories defined i
 | 3 | **Optimization Quality** | **10 pts** | • MILP solver (HiGHS / Coin-OR CBC via PuLP) guarantees mathematically optimal cost.<br>• Evaluates to $\min(1, \text{organizer\_cost} / \text{team\_cost}) = 1.0$ across all 10 public benchmark cases. |
 | 4 | **API Contract & Schema** | **10 pts** | • Exact endpoint paths: `GET /health` and `POST /optimize-energy`.<br>• Full Pydantic v2 validation matching Sections 06, 07, and 10 of Problem Statement.<br>• Strict preservation of `scenario_id` and `note_index` ordering (0..N-1). |
 | 5 | **Performance & Reliability** | **10 pts** | • Startup readiness: instant model singleton pre-warming in lifespan.<br>• p95 latency $\le 5$s with LRU cache and async thread pool execution.<br>• Controlled failure handling: fallback to safe `no_op` if provider quota fails.<br>• Zero secret exposure in responses or logs. |
-| 6 | **Deployment & Docker Fallback** | **10 pts** | • Multi-stage production container published to Docker Hub (`clear20/gridwise-llm:latest`).<br>• Container binds to `0.0.0.0:8000`, exposes port 8000, and contains no baked-in secrets.<br>• Single-command launch verified via `docker run`. |
+| 6 | **Deployment & Docker Fallback** | **10 pts** | • Multi-stage production container published to Docker Hub (`s0jib/gridwise-llm:latest`).<br>• Container binds to `0.0.0.0:8000`, exposes port 8000, and contains no baked-in secrets.<br>• Single-command launch verified via `docker run`. |
 | 7 | **Documentation & Local Reproducibility** | **10 pts** | • Step-by-step copy-paste local reproduction guide from clean environment.<br>• Documented environment variables, model provider, solvers, and dependencies.<br>• Public sample test procedure and verified expected result.<br>• Full 4-stage pipeline architecture diagram and documentation pack. |
 | **TOTAL** | | **100 pts** | **100% Complete & Verified** |
 
@@ -408,7 +408,7 @@ As required by Section 02 and Section 03 of the Participant Guide:
 1. **Working Public Endpoint**: Deployed HTTP service reachable for `GET /health` and `POST /optimize-energy`.
 2. **GitHub Repository**: [Clear20-22/AI_TookMy_Job-gridwise-llm](https://github.com/Clear20-22/AI_TookMy_Job-gridwise-llm) (created after question reveal; kept private during competition and made public for evaluation).
 3. **README & Configuration**: Self-contained setup, model/provider documentation, solver details, and sample inputs/outputs.
-4. **Docker Fallback Image**: Registry reference `clear20/gridwise-llm:latest` pullable during evaluation, binding `0.0.0.0`, port `8000`.
+4. **Docker Fallback Image**: Registry reference `s0jib/gridwise-llm:latest` pullable during evaluation, binding `0.0.0.0`, port `8000`.
 5. **3-Minute Architecture / Solution Video**: Accessible walkthrough detailing problem understanding, the LLM $\rightarrow$ Guardrails $\rightarrow$ Optimizer flow, and test execution (used for tie-breaker resolution).
 
 ---
